@@ -1,19 +1,19 @@
 # GearShift — Backend Implementation Plan
 
 > **AI-Native Industrial Control Tower with Hybrid Intelligence + Simulation Engine**
-> Hackathon build target: **24 hours**  |  Stack: **Next.js App Router, Node.js, In-Memory State, SSE, PixiJS (frontend)**
+> Hackathon build target: **24 hours**  |  Stack: **Next.js App Router, Node.js, Supabase (PostgreSQL), SSE, Groq LLM, PixiJS (frontend)**
 
 ---
 
-## User Review Required
+## ✅ Confirmed Stack Decisions
 
-> [!IMPORTANT]
-> **Key decisions that need your sign-off before I start building:**
-> 1. **ML Model approach** — I recommend hardcoding logistic-regression coefficients (fastest, zero Python dependency). Acceptable?
-> 2. **LLM provider** — Which provider/model for the explanation layer? (OpenAI `gpt-4o-mini`, Anthropic `claude-3-haiku`, Gemini `gemini-2.0-flash`, or skip LLM layer for MVP?)
-> 3. **Deployment** — Vercel serverless has cold-start & no persistent memory between requests. I'll use a **singleton module-level store** that persists within a single serverless instance. For the hackathon demo this is fine. Acceptable?
-> 4. **Frontend scope** — The PRD says "frontend handles rendering." I will expose all data via API + SSE. I will NOT build the PixiJS sandbox — only the API contract. Correct?
-> 5. **Database** — Pure in-memory (fastest) vs Supabase (persistent across deploys). Which do you prefer for the hackathon?
+> [!NOTE]
+> All key architecture decisions are locked in:
+> 1. **ML Model** — Hardcoded logistic regression coefficients. Zero runtime dependencies, sub-microsecond compute.
+> 2. **LLM Provider** — **Groq API** with model `llama-3.3-70b-versatile`. Ultra-fast inference (~300 tokens/sec). Used only for explanations, never core logic.
+> 3. **Database** — **Supabase (PostgreSQL)**. Persists state across serverless cold starts and deploys. In-memory cache layer sits on top for hot-path speed.
+> 4. **Real-time** — SSE via `GET /api/stream`. Supabase Realtime as fallback broadcast channel.
+> 5. **Frontend scope** — API + SSE contract only. PixiJS rendering handled by frontend team.
 
 ---
 
@@ -70,10 +70,11 @@ graph TD
 
 | Principle | Decision |
 |---|---|
-| State management | Module-level singleton (survives across requests within same instance) |
+| State management | **Supabase (PostgreSQL)** as source of truth + in-memory cache for hot reads |
 | Concurrency | Single-threaded event loop — no locks needed |
 | Simulation | Discrete-event with tick-based progression |
 | ML | Hardcoded logistic regression coefficients (no runtime dependency) |
+| LLM | **Groq API** — `llama-3.3-70b-versatile` — explanations only |
 | Real-time | Server-Sent Events (simpler than WebSockets for Vercel) |
 | Serialization | JSON over HTTP |
 
@@ -118,7 +119,7 @@ forgex/
 │   │
 │   ├── core/
 │   │   ├── state/
-│   │   │   ├── store.ts                  # Singleton global state
+│   │   │   ├── store.ts                  # In-memory cache (hot reads)
 │   │   │   ├── machine-store.ts          # Machine CRUD + state transitions
 │   │   │   └── graph-store.ts            # Dependency graph operations
 │   │   │
@@ -140,7 +141,14 @@ forgex/
 │   │   │   └── sse-manager.ts           # SSE connection manager + broadcast
 │   │   │
 │   │   └── llm/
-│   │       └── explanation-service.ts   # LLM-powered explanations (optional)
+│   │       └── explanation-service.ts   # Groq API — llama-3.3-70b-versatile
+│   │
+│   ├── db/
+│   │   ├── supabase.ts                  # Supabase client singleton
+│   │   ├── machines.db.ts               # Machine DB read/write helpers
+│   │   ├── events.db.ts                 # Event log persistence
+│   │   ├── actions.db.ts                # Action recommendations persistence
+│   │   └── simulation.db.ts             # Simulation state + snapshots
 │   │
 │   ├── models/
 │   │   ├── machine.ts                   # Machine type + factory
@@ -158,7 +166,7 @@ forgex/
 │       └── utils.ts                     # Helpers (clamp, uuid, etc.)
 │
 └── scripts/
-    └── generate-ml-data.ts              # (Optional) synthetic data generator
+    └── seed-db.ts                       # One-time Supabase seed script
 ```
 
 ---
@@ -1163,10 +1171,22 @@ This creates a **realistic dependency web** with feedback loops (turbine ↔ gen
 
 ---
 
-## 7. LLM Explanation Layer (Optional / Stretch)
+## 7. LLM Explanation Layer — Groq API
+
+**Provider:** Groq | **Model:** `llama-3.3-70b-versatile`
+**Why Groq:** ~300 tokens/sec inference — fast enough for real-time operator explanations.
+**Rule:** LLM is NEVER in the critical prediction or simulation path. It only generates human-readable text summaries.
+
+### 7.1 Groq Client Setup
 
 ```typescript
 // src/core/llm/explanation-service.ts
+import Groq from 'groq-sdk';
+
+const groq = new Groq({
+  apiKey: process.env.GROQ_API_KEY,
+});
+
 export class ExplanationService {
   async explain(context: {
     machine: Machine;
@@ -1174,25 +1194,83 @@ export class ExplanationService {
     cascadeImpacts: CausalityImpact[];
     costAnalysis: CostAnalysis;
   }): Promise<string> {
-    const prompt = `
-You are an industrial AI analyst. Given this machine state, explain the situation concisely:
+    const prompt = `You are an industrial control room AI analyst. Explain this machine situation to an operator in 2-3 sentences. Be direct, specific, and actionable.
 
 Machine: ${context.machine.name} (${context.machine.type})
 Status: ${context.machine.status}
-Risk: ${(context.machine.finalRisk * 100).toFixed(1)}%
-Temperature: ${context.machine.temperature}°C | Vibration: ${context.machine.vibration} mm/s | Load: ${context.machine.load}%
-Time to Failure: ${context.machine.timeToFailure}h
-Downstream Impact: ${context.cascadeImpacts.length} machines affected
-Estimated Loss: $${context.costAnalysis.futureCost.toLocaleString()}
+Risk Score: ${(context.machine.finalRisk * 100).toFixed(1)}%
+Sensors — Temperature: ${context.machine.temperature}°C | Vibration: ${context.machine.vibration} mm/s | Load: ${context.machine.load}%
+Estimated Time to Failure: ${context.machine.timeToFailure}h
+Cascade Risk: ${context.cascadeImpacts.length} downstream machines affected
+Financial Exposure: $${context.costAnalysis.futureCost.toLocaleString()}
 Recommended Action: ${context.actions[0]?.action || 'MONITOR'}
 
-Provide a 2-3 sentence explanation for an operator. Be clear and actionable.
-    `;
+Respond in plain English. No markdown. No bullet points. Operator-grade clarity.`;
 
-    // Call LLM API here (OpenAI, Anthropic, or Gemini)
-    // Return explanation string
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 150,
+      temperature: 0.3,  // low temp = consistent, factual output
+    });
+
+    return completion.choices[0]?.message?.content ?? 'Analysis unavailable.';
+  }
+
+  async summarizeFleet(insights: FleetInsights): Promise<string> {
+    const prompt = `Summarize the current industrial fleet status for a shift manager in 3 sentences:
+
+Overall Health: ${insights.overallHealthScore}%
+Machines: ${insights.statusBreakdown.healthy} healthy, ${insights.statusBreakdown.warning} warning, ${insights.statusBreakdown.critical} critical, ${insights.statusBreakdown.failed} failed
+Top Risk: ${insights.topRisks[0]?.name} at ${((insights.topRisks[0]?.risk ?? 0) * 100).toFixed(0)}% risk
+Total Financial Exposure: $${insights.estimatedTotalLoss.toLocaleString()}
+Potential Savings: $${insights.estimatedTotalSavings.toLocaleString()}
+
+Be concise. Focus on what needs immediate attention.`;
+
+    const completion = await groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 120,
+      temperature: 0.2,
+    });
+
+    return completion.choices[0]?.message?.content ?? 'Fleet summary unavailable.';
   }
 }
+```
+
+### 7.2 Explanation API Endpoint
+
+Add to API layer:
+
+```typescript
+// GET /api/machines/[id]/explain
+export async function GET(req: Request, { params }: { params: { id: string } }) {
+  const machine = store.machines.get(params.id);
+  if (!machine) return Response.json({ error: 'Not found' }, { status: 404 });
+
+  const impacts = causalityAgent.getLastImpacts(params.id);
+  const cost = costAgent.getLastAnalysis(params.id);
+  const actions = store.actions.filter(a => a.machineId === params.id && !a.executed);
+
+  const explanation = await explanationService.explain({ machine, actions, cascadeImpacts: impacts, costAnalysis: cost });
+
+  return Response.json({ machineId: params.id, explanation, generatedAt: Date.now() });
+}
+```
+
+### 7.3 Required Environment Variable
+
+```bash
+# .env.local
+GROQ_API_KEY=gsk_...
+```
+
+### 7.4 Required Dependency
+
+```bash
+npm install groq-sdk
 ```
 
 ---
@@ -1226,74 +1304,98 @@ Provide a 2-3 sentence explanation for an operator. Be clear and actionable.
 
 ---
 
-## 10. Hour-by-Hour Execution Plan
+## 10. Phase-by-Phase Execution Plan
 
-### Phase 1 — Foundation (Hours 0–5) ⚡ CRITICAL
-
-| Hour | Task | Output |
-|---|---|---|
-| 0–1 | Next.js project init, folder structure, TypeScript config, all data models | Compilable skeleton |
-| 1–2 | Global store singleton, machine store, seed data, `ensureInitialized()` | State engine working |
-| 2–3 | `GET /api/machines`, `GET /api/machines/:id` | First API responses |
-| 3–4 | Event ingestion service, `POST /api/events/inject` | Events flow into system |
-| 4–5 | Rule engine + ML model + risk fusion | Hybrid risk scores computing |
-
-**✅ Milestone: Can inject events and see risk scores update via API.**
+> [!TIP]
+> **Build philosophy:** Phase 1 lays the ENTIRE skeleton — every file touched, every table created, every credential wired, every API route stubbed. The remaining phases fill in the intelligence, simulation, and reasoning layer by layer. At the end of Phase 1 you should have a running server that returns empty/seeded data from all endpoints.
 
 ---
 
-### Phase 2 — Intelligence (Hours 5–10) ⚡ CRITICAL
+### Phase 1 — Full Backend Skeleton + Supabase + Synthetic Data (Hours 0–6) ⚡ CRITICAL
+
+**Goal:** By end of Phase 1, the entire codebase structure exists, Supabase is live with seeded data, the synthetic ML training dataset is generated, and all API routes return real (seeded) data.
 
 | Hour | Task | Output |
 |---|---|---|
-| 5–6 | Prediction Agent + Agent Orchestrator skeleton | Full prediction pipeline |
-| 6–7 | Graph store + Causality Agent (BFS propagation) | Cascading risk propagation |
-| 7–8 | Cost Agent + Action Agent | Financial impact + recommendations |
-| 8–9 | Full orchestrator pipeline integration + testing | End-to-end: event → prediction → cascade → cost → action |
-| 9–10 | `POST /api/machines/:id/fix`, fix logic, action tracking | Fix/repair flow working |
+| 0–1 | **Project init:** `npx create-next-app`, TypeScript strict mode, folder structure (all directories from Section 2), `.gitignore`, `.env.local` template | Compilable Next.js skeleton with full directory tree |
+| 1–2 | **Data models:** Create ALL TypeScript interfaces — `Machine`, `Connection`, `SystemEvent`, `SimulationState`, `ScheduledEvent`, `SimulationSnapshot`, `ActionRecommendation`, `SensorSnapshot`, `CausalityImpact`, `CostAnalysis`, `PredictionResult`. Create `src/lib/constants.ts` (all thresholds, weights, config) + `src/lib/utils.ts` (`clamp`, `generateId`, helpers) | Every type the system will ever use is defined |
+| 2–3 | **Supabase setup:** Create Supabase project, run migration SQL (6 tables from Section 13), set up RLS policies (service role bypass), wire `NEXT_PUBLIC_SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_ANON_KEY` into `.env.local`. Create `src/db/supabase.ts` (client singleton). Create DB helper modules: `machines.db.ts`, `events.db.ts`, `actions.db.ts`, `simulation.db.ts` with read/write/upsert functions | Supabase connected and verified with a test query |
+| 3–4 | **Seed data + synthetic dataset:** Create `src/data/seed-machines.ts` (8 machines) + `src/data/seed-connections.ts` (9 edges). Write `scripts/seed-db.ts` to insert seeds into Supabase. **Generate synthetic ML dataset:** Write `scripts/generate-ml-data.ts` — produce 2,000+ rows of `{temperature, vibration, load, failed: 0\|1}` with realistic distributions. Export as `data/training-data.json` | DB seeded with 8 machines + 9 connections. Synthetic CSV/JSON ready for ML training |
+| 4–5 | **In-memory state engine:** Create `src/core/state/store.ts` (in-memory cache singleton), `machine-store.ts` (`getMachine`, `getAllMachines`, `updateMachine`, `resetMachine`), `graph-store.ts` (`getDependents`, `getDependencies`, `getConnectionsFrom`, `getConnectionStrength`). Wire `ensureInitialized()` to hydrate cache from Supabase on cold start | State engine loads from Supabase → in-memory. Dual-write path ready |
+| 5–6 | **API route stubs:** Create ALL 7 route files (GET machines, GET machine by ID, POST events/inject, POST simulate/tick, POST fix, GET insights, GET stream). Each returns real seeded data from the state engine but with placeholder logic (no risk calc, no simulation yet). Verify all routes with curl | Every API endpoint returns 200 with real machine data |
 
-**✅ Milestone: Full AI pipeline operational. Inject event → see cascading impacts + cost + recommended actions.**
+**✅ Milestone: Full codebase skeleton exists. All API routes working with seeded Supabase data. Synthetic ML dataset generated. `npm run dev` serves all endpoints. Cold-start recovery from Supabase verified.**
+
+**Deliverables checklist:**
+- [ ] Next.js project compiles with zero errors
+- [ ] All 30+ files from folder structure created (even if some are stubs)
+- [ ] Supabase tables exist with seeded data (8 machines, 9 connections)
+- [ ] `.env.local` has all 4 credentials (Supabase URL, anon key, service role key, Groq API key)
+- [ ] `data/training-data.json` has 2,000+ synthetic training rows
+- [ ] All 7 API routes return valid JSON
+- [ ] `ensureInitialized()` hydrates from Supabase
 
 ---
 
-### Phase 3 — Simulation (Hours 10–16) ⚡ CRITICAL
+### Phase 2 — Hybrid Intelligence: ML Training + Rule Engine + Risk Fusion (Hours 6–10) ⚡ CRITICAL
+
+**Goal:** Train the logistic regression model on synthetic data, build the deterministic rule engine, implement risk fusion. By end of this phase, every machine has a live `finalRisk` score.
 
 | Hour | Task | Output |
 |---|---|---|
-| 10–11 | Simulation engine skeleton, tick logic, sensor drift | Time advances |
-| 11–12 | Event queue system, scheduled events | Delayed cascade events |
-| 12–13 | Cascade scheduling from simulation (failure → downstream delays) | Chain reactions over time |
-| 13–14 | `POST /api/simulate/tick` (single + batch ticks) | Simulation controllable via API |
-| 14–15 | Simulation snapshot history, state recording | Playback data |
-| 15–16 | Integration testing — full simulation scenario | All systems working together |
+| 6–7 | **Rule engine:** Implement `src/core/engine/rule-engine.ts` with full temperature/vibration/load rules + compound multiplier logic (Section 4.3). Unit test with edge cases | `computeRuleRisk(machine)` returns 0–1 for any input |
+| 7–8 | **ML model training:** Use the synthetic dataset from Phase 1. Train logistic regression (can be done in a Node script using simple gradient descent, or pre-compute coefficients in Python). Extract coefficients → hardcode into `src/core/engine/ml-model.ts`. Implement `sigmoid()` + `computeMLRisk()` | Trained model with verified coefficients. `computeMLRisk(machine)` returns 0–1 |
+| 8–9 | **Risk fusion + status derivation:** Implement `src/core/engine/risk-fusion.ts` — `fuseRisk()`, `estimateTimeToFailure()`, `deriveStatus()`. Wire rule engine + ML model → fusion. Test with various sensor inputs to verify realistic risk scores | `finalRisk` scores compute correctly from rule + ML blend |
+| 9–10 | **Event ingestion pipeline:** Implement `src/core/engine/event-ingestion.ts` — `processEvent()` routing (SENSOR_UPDATE, USER_INJECTED_EVENT, FIX_ACTION, CASCADE_PROPAGATION). Each event type updates machine state + triggers risk recalculation. Wire into `POST /api/events/inject`. Test: inject high-temp event → see risk spike | Events flow through pipeline → machine states update → risks recalculate |
 
-**✅ Milestone: Run 50-tick simulation, see machines degrade, cascade, and fail over time. Fix works.**
+**✅ Milestone: Inject a sensor event via API → machine's `ruleRisk`, `mlRisk`, `finalRisk`, `status`, and `timeToFailure` all update correctly. Hybrid intelligence is LIVE.**
 
 ---
 
-### Phase 4 — Real-Time & Polish (Hours 16–20) 🔶 IMPORTANT
+### Phase 3 — Agent Pipeline + Causality Engine + Simulation (Hours 10–16) ⚡ CRITICAL
+
+**Goal:** Build the full multi-agent orchestrator, causality graph propagation, cost/action agents, and the discrete-event simulation engine. This is the core AI reasoning pipeline.
 
 | Hour | Task | Output |
 |---|---|---|
-| 16–17 | SSE manager, `GET /api/stream`, broadcast function | Real-time data streaming |
-| 17–18 | `GET /api/insights` analytics endpoint | Dashboard-ready data |
-| 18–19 | Auto-simulation mode (optional interval-based ticking) | Simulation runs autonomously |
-| 19–20 | Error handling pass, edge cases, input validation | Production-hardened |
+| 10–11 | **Prediction Agent + Agent Orchestrator:** Implement `prediction-agent.ts` (wraps rule engine + ML + fusion into single `.compute()` call). Build `agent-orchestrator.ts` skeleton with sequential pipeline: Prediction → Causality → Cost → Action | Orchestrator runs prediction on any machine |
+| 11–12 | **Causality Agent:** Implement `causality-agent.ts` — full BFS graph propagation with depth attenuation (`0.7^depth`), noise floor (`< 0.05`), additive risk capping. Test: fail generator → see compressor + pump risk spike → cascade to downstream | Risk propagates through dependency graph correctly |
+| 12–13 | **Cost Agent + Action Agent:** Implement `cost-agent.ts` (direct cost, cascade cost, future cost with degradation rate). Implement `action-agent.ts` (FIX_NOW / SCHEDULE / MONITOR / ESCALATE decision logic). Wire into orchestrator. Persist actions to Supabase | Full pipeline: event → risk → cascade → cost → action recommendation |
+| 13–14 | **Fix action logic:** Implement `applyFix()` — reset sensors to healthy baseline, clear pending cascade events, mark actions as executed, persist to Supabase. Wire `POST /api/machines/:id/fix`. Test full cycle: degrade → fail → fix → recover | Fix/repair flow works end-to-end |
+| 14–15 | **Simulation engine:** Implement `simulation-engine.ts` — `tick()` method with sensor drift, scheduled event processing, cascade scheduling, snapshot capture. Implement event queue (`ScheduledEvent[]`). Wire `POST /api/simulate/tick` with batch support (up to 50 ticks) | Simulation ticks advance time, machines degrade, cascades fire |
+| 15–16 | **Simulation integration + persistence:** Save simulation snapshots to Supabase `simulation_snapshots` table. Save simulation state to `simulation_state` table (single-row upsert). Integration test: run 50 ticks → verify progressive degradation → fix a machine → verify recovery → check Supabase for persisted snapshots | Full simulation pipeline verified with persistence |
 
-**✅ Milestone: Real-time streaming works. Dashboard insights available. System is robust.**
+**✅ Milestone: Run end-to-end scenario: inject stress event → watch cascade propagation → see cost estimates → receive action recommendations → run 50 simulation ticks → watch chain reactions → fix machines → verify recovery. All persisted to Supabase.**
 
 ---
 
-### Phase 5 — LLM + Stretch (Hours 20–24) 🔷 OPTIONAL
+### Phase 4 — Groq LLM Integration + Real-Time SSE + Full Reasoning Pipeline (Hours 16–21) ⚡ CRITICAL
+
+**Goal:** Wire Groq's `llama-3.3-70b-versatile` into the reasoning pipeline for operator-grade explanations. Build the SSE real-time streaming layer. Complete the insights analytics endpoint with AI-generated fleet summaries.
 
 | Hour | Task | Output |
 |---|---|---|
-| 20–21 | LLM explanation service integration | Natural language insights |
-| 21–22 | Enhanced insights: trend detection, predictions summary | Richer analytics |
-| 22–23 | Frontend integration support: CORS, sandbox API contract docs | Frontend team unblocked |
-| 23–24 | Load testing, final polish, documentation | Ship-ready |
+| 16–17 | **Groq LLM integration:** Install `groq-sdk`. Implement `src/core/llm/explanation-service.ts` — `explain()` method (single machine analysis) + `summarizeFleet()` method (fleet-wide summary). Wire `GROQ_API_KEY`. Test with real API calls — verify latency < 500ms per explanation | Groq client working. Explanations generated in plain English |
+| 17–18 | **Explanation API endpoint:** Create `GET /api/machines/[id]/explain` route. Wire orchestrator to optionally call `ExplanationService.explain()` on high-risk machines (risk > 0.6). Update `GET /api/insights` to include `fleetSummary` from `summarizeFleet()`. Add error handling for Groq rate limits / failures (graceful fallback to `reason` string from Action Agent) | LLM explanations available via API. Insights include AI fleet summary |
+| 18–19 | **SSE real-time system:** Implement `src/core/realtime/sse-manager.ts` — client connection tracking, `broadcastState()`, encoded message sending, disconnect cleanup. Implement `GET /api/stream` route with proper headers (`text/event-stream`). Wire `broadcastState()` into event ingestion + simulation tick. Test: open SSE connection → inject event → verify push | Real-time state updates streaming to clients |
+| 19–20 | **Full reasoning pipeline integration:** Wire everything together — event comes in → event ingestion → agent orchestrator (prediction → causality → cost → action) → Groq explanation (async, non-blocking) → state persist to Supabase → SSE broadcast. Test the complete flow with multiple concurrent SSE clients | Complete reasoning pipeline: Event → Intelligence → Explanation → Persist → Broadcast |
+| 20–21 | **Enhanced insights + fleet analytics:** Build comprehensive `GET /api/insights` response — overall health score, status breakdown, top 5 risks, pending actions, estimated total loss, estimated savings, simulation tick, Groq fleet summary. Add trend detection (compare current vs 10-tick-ago snapshot) | Rich analytics endpoint with AI-powered fleet summary |
 
-**✅ Milestone: Complete system with LLM explanations. Demo-ready.**
+**✅ Milestone: Full AI reasoning pipeline operational. Inject event → hybrid risk scores → graph cascade → cost analysis → action recommendation → Groq natural language explanation → persisted to Supabase → pushed via SSE in real-time. Insights endpoint returns AI fleet summary.**
+
+---
+
+### Phase 5 — Polish, Testing, Edge Cases, Deployment (Hours 21–24) 🔶 IMPORTANT
+
+**Goal:** Harden the system. Handle edge cases. Integration testing. Deploy to Vercel. Documentation.
+
+| Hour | Task | Output |
+|---|---|---|
+| 21–22 | **Error handling + edge cases:** Implement all edge cases from Section 8 (circular deps, all-fail, rapid-fire events, SSE disconnect, negative sensors, risk overflow, missing IDs, cold start, tick burst cap). Add input validation on all POST endpoints. Add rate limiting for Groq calls (cache explanations for 30s) | All edge cases handled gracefully |
+| 22–23 | **Integration testing:** Run full scenario tests with curl commands (Section 14). Test cold start recovery (restart server → verify state rehydrates from Supabase). Test SSE with multiple clients. Test simulation + fix + cascade + explain flow. Verify Supabase persistence across restarts | All test scenarios pass |
+| 23–24 | **Deploy + documentation:** Deploy to Vercel (set env vars). Verify all endpoints work in production. Update README with API documentation, architecture diagram, setup instructions. Create `.env.example`. Final git push | Live on Vercel. Documentation complete. Ship-ready |
+
+**✅ Milestone: Production deployment live. All endpoints verified. Documentation complete. Demo-ready.**
 
 ---
 
@@ -1303,30 +1405,38 @@ Provide a 2-3 sentence explanation for an operator. Be clear and actionable.
 
 | Feature | Status |
 |---|---|
-| State engine with 8 machines | Critical |
-| Event ingestion + processing | Critical |
-| Rule engine + ML model + fusion | Critical |
-| Causality graph propagation | Critical |
-| Cost agent | Critical |
-| Action recommendations | Critical |
-| Simulation engine with ticks | Critical |
-| Fix/repair action | Critical |
-| REST API (all 6 endpoints) | Critical |
+| Supabase schema (6 tables) + seeded data | Critical |
+| In-memory cache + Supabase dual-write | Critical |
+| State engine with 8 machines + 9 connections | Critical |
+| Synthetic ML training dataset (2,000+ rows) | Critical |
+| Trained logistic regression model (hardcoded coefficients) | Critical |
+| Rule engine + ML model + risk fusion | Critical |
+| Event ingestion pipeline (4 event types) | Critical |
+| Agent orchestrator (4-agent pipeline) | Critical |
+| Causality graph propagation (BFS) | Critical |
+| Cost agent + financial impact modeling | Critical |
+| Action agent (FIX_NOW / SCHEDULE / MONITOR) | Critical |
+| Simulation engine with tick-based progression | Critical |
+| Fix/repair action with cascade cleanup | Critical |
+| REST API (all 7 endpoints + explain) | Critical |
+| Groq LLM explanations (`llama-3.3-70b-versatile`) | Critical |
 | SSE real-time streaming | Critical |
-| Seed data (machines + graph) | Critical |
+| `GET /api/insights` with AI fleet summary | Critical |
+| Cold-start recovery from Supabase | Critical |
 
 ### 🔷 Stretch Goals (Nice to Have)
 
 | Feature | Priority |
 |---|---|
-| LLM explanation layer | High |
-| Auto-running simulation (interval) | Medium |
-| Simulation speed control (1x/2x/5x) | Medium |
+| Auto-running simulation (server-side interval) | High |
+| Simulation speed control (1x / 2x / 5x) | Medium |
+| Groq explanation caching (Redis / in-memory TTL) | Medium |
 | Undo/replay simulation history | Low |
 | WebSocket upgrade from SSE | Low |
-| Persistent storage (Supabase) | Low |
-| Authentication | Not needed for hackathon |
-| Custom machine creation API | Low |
+| Supabase Realtime as broadcast fallback | Low |
+| Authentication / API keys | Not needed for hackathon |
+| Custom machine creation/deletion API | Low |
+| Alert/notification system (webhook on critical) | Low |
 
 ---
 
@@ -1359,14 +1469,137 @@ Every `Machine` object includes `position: { x, y }` for direct rendering. Front
 
 ---
 
-## Open Questions
+## 13. Supabase Schema
 
-> [!IMPORTANT]
-> 1. **ML coefficients approach:** Hardcoded logistic regression vs training a real model with synthetic data. I strongly recommend hardcoded for the hackathon. Confirm?
-> 2. **LLM provider:** Which API for the explanation layer? Or skip entirely for MVP?
-> 3. **Auto-simulation:** Should the backend auto-tick on an interval, or only tick when the frontend calls `POST /api/simulate/tick`?
-> 4. **Machine count:** 8 machines in seed data is optimal for demo (complex enough to show cascades, simple enough to visualize). Good?
-> 5. **Deployment:** Vercel Edge Runtime or standard Node.js runtime? Standard Node is safer for SSE.
+### Required Tables
+
+```sql
+-- Machines (persistent state)
+CREATE TABLE machines (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  type TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'HEALTHY',
+  temperature FLOAT NOT NULL,
+  vibration FLOAT NOT NULL,
+  load FLOAT NOT NULL,
+  rule_risk FLOAT NOT NULL DEFAULT 0,
+  ml_risk FLOAT NOT NULL DEFAULT 0,
+  final_risk FLOAT NOT NULL DEFAULT 0,
+  failure_probability FLOAT NOT NULL DEFAULT 0,
+  time_to_failure INT NOT NULL DEFAULT 168,
+  connections TEXT[] NOT NULL DEFAULT '{}',
+  position_x INT NOT NULL DEFAULT 0,
+  position_y INT NOT NULL DEFAULT 0,
+  last_updated BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Connections (dependency graph edges)
+CREATE TABLE connections (
+  id TEXT PRIMARY KEY,
+  source_id TEXT NOT NULL REFERENCES machines(id),
+  target_id TEXT NOT NULL REFERENCES machines(id),
+  dependency_strength FLOAT NOT NULL,
+  type TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Events (audit log)
+CREATE TABLE events (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  machine_id TEXT NOT NULL,
+  timestamp BIGINT NOT NULL,
+  payload JSONB NOT NULL DEFAULT '{}',
+  source TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Action recommendations
+CREATE TABLE actions (
+  id TEXT PRIMARY KEY,
+  machine_id TEXT NOT NULL,
+  action TEXT NOT NULL,
+  priority TEXT NOT NULL,
+  reason TEXT NOT NULL,
+  estimated_cost INT NOT NULL,
+  estimated_savings INT NOT NULL,
+  deadline INT NOT NULL,
+  created_at BIGINT NOT NULL,
+  executed BOOLEAN NOT NULL DEFAULT FALSE
+);
+
+-- Simulation snapshots (tick history)
+CREATE TABLE simulation_snapshots (
+  id SERIAL PRIMARY KEY,
+  tick INT NOT NULL,
+  timestamp BIGINT NOT NULL,
+  machine_states JSONB NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+-- Simulation state (single row, upserted)
+CREATE TABLE simulation_state (
+  id INT PRIMARY KEY DEFAULT 1,
+  is_running BOOLEAN NOT NULL DEFAULT FALSE,
+  current_tick INT NOT NULL DEFAULT 0,
+  tick_interval_ms INT NOT NULL DEFAULT 1000,
+  speed FLOAT NOT NULL DEFAULT 1,
+  event_queue JSONB NOT NULL DEFAULT '[]',
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### Supabase Client Setup
+
+```typescript
+// src/db/supabase.ts
+import { createClient } from '@supabase/supabase-js';
+
+export const supabase = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!  // service role for server-side writes
+);
+```
+
+### Read/Write Strategy
+
+```
+┌─────────────────────────────────────────────────┐
+│              Request comes in                   │
+└───────────────────┬─────────────────────────────┘
+                    │
+         ┌──────────▼──────────┐
+         │  In-memory cache    │  ← hot reads (Map<id, Machine>)
+         │  (populated once)   │
+         └──────────┬──────────┘
+                    │ cache hit → return immediately
+                    │ cache miss → read from Supabase, populate cache
+         ┌──────────▼──────────┐
+         │     Supabase DB      │  ← writes always go here too
+         └─────────────────────┘
+```
+
+- **Reads**: Always from in-memory cache. Cache is populated on `ensureInitialized()` (startup).
+- **Writes**: Dual-write — update in-memory cache immediately, then async `upsert` to Supabase.
+- **Cold start recovery**: `ensureInitialized()` loads all rows from Supabase → populates in-memory cache. Reconnects seamlessly after serverless restart.
+
+### Required Environment Variables
+
+```bash
+# .env.local
+NEXT_PUBLIC_SUPABASE_URL=https://xxxx.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=eyJ...
+SUPABASE_SERVICE_ROLE_KEY=eyJ...
+GROQ_API_KEY=gsk_...
+```
+
+### Required Dependencies
+
+```bash
+npm install @supabase/supabase-js groq-sdk
+```
 
 ---
 
@@ -1376,29 +1609,33 @@ Every `Machine` object includes `position: { x, y }` for direct rendering. Front
 
 ```bash
 # After building, verify with curl commands:
-curl http://localhost:3000/api/machines                    # Should return 8 machines
+curl http://localhost:3000/api/machines                    # Should return 8 machines from Supabase
 curl http://localhost:3000/api/machines/turb-01            # Should return turbine details
 curl -X POST http://localhost:3000/api/events/inject \
   -H "Content-Type: application/json" \
   -d '{"machineId":"turb-01","type":"SENSOR_UPDATE","payload":{"temperature":95,"vibration":8.5,"load":85}}'
-# Should return updated machine with high risk
+# Should return updated machine with high risk + Groq explanation
 
 curl -X POST http://localhost:3000/api/simulate/tick \
   -H "Content-Type: application/json" \
   -d '{"count":10}'
-# Should show machines degrading over time
+# Should show machines degrading; snapshots saved to Supabase
 
 curl -X POST http://localhost:3000/api/machines/turb-01/fix
-# Should reset turbine to healthy
+# Should reset turbine to healthy (persisted in DB)
 
 curl http://localhost:3000/api/insights
-# Should return analytics dashboard data
+# Should return analytics including Groq fleet summary
+
+curl http://localhost:3000/api/machines/turb-01/explain
+# Should return Groq-generated operator explanation
 ```
 
 ### Manual Verification
 
 1. Open SSE stream in browser → verify live updates flow
 2. Inject a high-risk event → verify cascade propagation to downstream machines
-3. Run 50 simulation ticks → verify progressive degradation
-4. Fix a failed machine → verify recovery
-5. Check insights endpoint → verify accurate analytics
+3. Run 50 simulation ticks → verify progressive degradation + Supabase snapshot rows
+4. Fix a failed machine → verify recovery (persisted across serverless restarts)
+5. Check insights endpoint → verify Groq fleet summary present
+6. Kill + restart dev server → verify in-memory state rehydrates from Supabase

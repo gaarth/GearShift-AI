@@ -1,19 +1,19 @@
 # GearSwitch Dashboard — Implementation Plan
 
-> **Aesthetic Direction:** *Industrial Retro-Futurism* — A pixel-art simulation hybrid crossed with cinematic control-room darkness. Not a SaaS dashboard. A living mission interface where an AI operator runs a factory in real time.
+> **Aesthetic Direction:** *Minimal Industrial Pixel-RPG* — A top-down pixel art factory simulation in the GBA/RPG-Maker tradition. Muted, soft color palette. No neon. No loud colors. Clean tile-based zones where chibi pixel workers patrol industrial equipment. The UI chrome is minimal and stays out of the way — the simulation IS the interface.
 
 > **DFII Score: 14/15** (Impact: 5, Fit: 5, Feasibility: 4, Performance: 4, Consistency Risk: -4)
 
-> **Differentiation Anchor:** "If this were screenshotted with the logo removed, you'd recognize it by the pixel-art machines breathing steam on a dark canvas floor, with neon cascade pipes pulsing failure across the factory."
+> **Differentiation Anchor:** "If this were screenshotted with the logo removed, you'd recognize it as a top-down pixel factory — chunky industrial machines, tiny hard-hat workers patrolling tile floors, soft status glows in muted amber and grey-green. Nothing screams. Everything breathes."
 
 ---
 
 ## User Review Required
 
-> ✅ **Machine Panel Visualization:** **2D Isometric Canvas rendering** (no Three.js). A high-fidelity 2D isometric SVG/Canvas drawing of the machine with animated red-glow highlights on affected failure zones. Slowly rotates via CSS transform. Same forensic-inspection feel, zero extra bundle weight.
+> ✅ **Machine Panel Visualization:** **2D top-down pixel art** rendering of the machine (matching the factory map art style). Static sprite with a soft pulsing status glow border. No rotation. Matches the GBA/RPG-Maker visual language of the factory canvas.
 
 > [!IMPORTANT]
-> **PixiJS vs Raw Canvas:** You already have `pixi.js` installed. For the factory map with 8 machines, 5 workers, particles, pipes, and zone transitions running at 60fps, PixiJS gives us GPU-accelerated rendering, built-in sprite batching, and a scene graph — massively faster than raw Canvas2D for this workload. **I recommend using PixiJS for the simulation layer. Confirm?**
+> ✅ **PixiJS Confirmed:** Using PixiJS + `@pixi/react` for the factory canvas simulation layer.
 
 > [!WARNING]
 > **Build Order Resequencing:** Your plan's hour-by-hour schedule has been restructured below for dependency correctness and maximum demo-readiness at every checkpoint. The factory map must render before workers can patrol it; state stores must exist before UI can consume them. The new order ensures a **demoable product at every 2-hour checkpoint.**
@@ -22,9 +22,9 @@
 
 ## Design System Snapshot
 
-### Aesthetic Name: *Industrial Retro-Futurism*
+### Aesthetic Name: *Minimal Industrial Pixel-RPG*
 
-**Key Inspiration:** NASA mission control interfaces, pixel-art factory simulators (Factorio vibes), submarine command displays — where every glow means something and silence means danger.
+**Key Inspiration:** GBA Pokemon/RPG Maker top-down indoor environments. Hospital/clinic and indoor workspace pixel maps (image 4 reference). Chibi character sprite sheets with 4-directional walk cycles (Pokemon trainer sprite style, images 1 & 2). Muted, desaturated palettes. Clean tile floors. Industrial equipment as simple top-down objects. The factory feels lived-in, not cinematic.
 
 ### Typography
 
@@ -39,48 +39,69 @@
 
 ```css
 :root {
-  /* Backgrounds */
-  --bg-void:        #050505;   /* Deepest background — logs drawer */
-  --bg-primary:     #0D0D0D;   /* Main dashboard background */
-  --bg-surface:     #111118;   /* Panels, cards */
-  --bg-elevated:    #1A1A2E;   /* Canvas floor tiles */
-  --bg-hover:       #1E1E3A;   /* Hover states */
+  /* === CANVAS / MAP BACKGROUNDS === */
+  --bg-floor-base:     #D8D4CC;   /* Light warm grey — default tile floor */
+  --bg-floor-zone-a:   #C8D0C0;   /* Zone A: Raw Materials — muted sage */
+  --bg-floor-zone-b:   #C4CCD8;   /* Zone B: Assembly — muted slate blue */
+  --bg-floor-zone-c:   #D4C8C0;   /* Zone C: Packaging — muted warm */
+  --bg-floor-zone-d:   #C8C4B8;   /* Zone D: Storage — muted tan */
+  --bg-floor-zone-e:   #C0CCC8;   /* Zone E: QC — muted teal-grey */
+  --bg-wall:           #7A7068;   /* Wall color — dark warm grey */
+  --bg-wall-border:    #5A5048;   /* Wall border — darker warm grey */
 
-  /* Status Colors — the soul of the system */
-  --status-good:    #22C55E;   /* Operational — steady green glow */
-  --status-watch:   #EAB308;   /* Warning — amber flicker */
-  --status-critical:#EF4444;   /* Critical — red pulse */
-  --status-isolated:#1F2937;   /* Dead/isolated — dark grey */
+  /* === UI CHROME BACKGROUNDS === */
+  --bg-ui-base:        #F4F2EF;   /* UI panels — warm off-white */
+  --bg-ui-surface:     #ECEAE6;   /* Slightly darker surface */
+  --bg-ui-elevated:    #E4E2DE;   /* Cards, hover states */
+  --bg-ui-dark:        #2C2A28;   /* Dark UI elements — logs drawer */
 
-  /* Agent Tag Colors */
-  --agent-sensor:   #22D3EE;   /* Cyan — sensor readings */
-  --agent-predict:  #EAB308;   /* Yellow — prediction */
-  --agent-rca:      #F97316;   /* Orange — root cause analysis */
-  --agent-action:   #EF4444;   /* Red — action decisions */
-  --agent-roi:      #22C55E;   /* Green — financial impact */
-  --agent-thinking: #A78BFA;   /* Purple — agent reasoning */
+  /* === STATUS COLORS (muted, not neon) === */
+  --status-good:       #5A8A5A;   /* Operational — muted forest green */
+  --status-good-glow:  rgba(90, 138, 90, 0.25);
+  --status-watch:      #A08040;   /* Warning — muted amber/ochre */
+  --status-watch-glow: rgba(160, 128, 64, 0.25);
+  --status-critical:   #9A4040;   /* Critical — muted brick red */
+  --status-critical-glow: rgba(154, 64, 64, 0.25);
+  --status-isolated:   #8A8A8A;   /* Dead/isolated — grey */
 
-  /* UI Accents */
-  --accent-primary: #6366F1;   /* Indigo — buttons, active states */
-  --accent-glow:    #818CF8;   /* Lighter indigo — glows */
-  --pipe-default:   #334155;   /* Slate — default pipe color */
-  --pipe-active:    #475569;   /* Slightly brighter for active */
+  /* === PIPE COLORS === */
+  --pipe-default:      #8A8078;   /* Default pipe — warm medium grey */
+  --pipe-watch:        #A08040;   /* Watch upstream — muted amber */
+  --pipe-critical:     #9A4040;   /* Critical upstream — muted brick */
+  --pipe-isolated:     #C0BCB8;   /* Dead pipe — light grey */
 
-  /* Text */
-  --text-primary:   #E2E8F0;   /* Primary text — slate-200 */
-  --text-secondary: #94A3B8;   /* Secondary — slate-400 */
-  --text-muted:     #64748B;   /* Muted — slate-500 */
-  --text-inverse:   #0D0D0D;   /* On light backgrounds */
+  /* === AGENT LOG TAG COLORS (muted) === */
+  --agent-sensor:      #4A8A9A;   /* Cyan-grey — sensor readings */
+  --agent-predict:     #8A7A30;   /* Dark gold — prediction */
+  --agent-rca:         #9A6030;   /* Burnt orange — root cause */
+  --agent-action:      #9A4040;   /* Brick red — action decisions */
+  --agent-roi:         #5A8A5A;   /* Forest green — financial impact */
+  --agent-thinking:    #7A6A8A;   /* Muted purple — agent reasoning */
 
-  /* Financial */
-  --money-save:     #22C55E;   /* Savings — green */
-  --money-loss:     #EF4444;   /* Losses — red */
-  --money-neutral:  #EAB308;   /* Pending — amber */
+  /* === UI TEXT === */
+  --text-primary:      #2C2A28;   /* Near-black — primary text */
+  --text-secondary:    #6A6460;   /* Medium warm grey — secondary */
+  --text-muted:        #9A9490;   /* Muted grey — hints, labels */
+  --text-on-dark:      #E8E4E0;   /* Light warm white — on dark panels */
+  --text-on-canvas:    #2C2A28;   /* On light canvas floor */
 
-  /* Projection overlay */
-  --projection-tint: rgba(139, 92, 246, 0.08); /* Purple tint for future mode */
+  /* === ACCENT (UI buttons, focus states) === */
+  --accent-primary:    #4A6A8A;   /* Muted steel blue — buttons */
+  --accent-hover:      #3A5A7A;   /* Darker on hover */
+  --accent-focus:      rgba(74, 106, 138, 0.3); /* Focus ring */
+
+  /* === FINANCIAL === */
+  --money-save:        #5A8A5A;   /* Muted green */
+  --money-loss:        #9A4040;   /* Muted red */
+  --money-neutral:     #8A7A30;   /* Muted gold */
+
+  /* === PROJECTION OVERLAY === */
+  --projection-tint:   rgba(100, 90, 120, 0.10); /* Very subtle purple tint */
 }
 ```
+
+> [!NOTE]
+> **Color Philosophy:** Every color is desaturated by ~40% from a typical vibrant palette. Status indicators use muted brick red, ochre, and forest green — legible, distinct, but never garish. The tile floors read like real pixel RPG maps. The UI chrome uses warm off-whites and dark warm greys. Nothing is pure black or pure white.
 
 ### Spacing Rhythm
 
@@ -100,7 +121,228 @@
 
 ---
 
-## Proposed Changes
+## Visual Style & Sprite Generation Guidelines
+
+> [!IMPORTANT]
+> **All 2D sprites and maps must be generated using the nano-banana image generation tool before the build phase begins.** Do not draw anything procedurally that conflicts with this style. Canvas drawing code must faithfully replicate generated sprites.
+
+### Reference Style Summary
+
+| Ref Image | What it shows | How we use it |
+|-----------|--------------|---------------|
+| Image 1 (Pokemon trainer red) | 4-row × 3-col sprite sheet, chibi proportions, walk + idle frames | Worker sprite sheet format |
+| Image 2 (Pokemon female trainer) | Same sprite sheet format, different colors/accessories | Second worker variant format |
+| Image 3 (Teal pixel RPG map) | Top-down indoor/outdoor map, soft teal palette, rounded room shapes, characters placed in map | Zone aesthetic inspiration |
+| Image 4 (Hospital pixel map) | Top-down indoor multi-room map, clean tile floor, furniture as top-down objects, room dividers | **PRIMARY MAP REFERENCE — Factory zone layout style** |
+
+### Art Style Rules (Non-Negotiable)
+
+- **Perspective:** Top-down orthographic (bird's eye, not isometric)
+- **Pixel size:** ~16×24px base characters, 32×32px machines, tiles divisible by 16px
+- **Outlines:** Solid 1px dark outlines on all sprites
+- **Palette per sprite:** Max 6-8 colors per character sprite, 10-12 per machine sprite
+- **Color mood:** Desaturated, warm-neutral. No electric brightness. Reference image 4's tile floor greys and warm wall yellows as primary tones
+- **Characters:** Round heads, slightly oversized, chibi proportions exactly like images 1 & 2
+- **No neon. No gradients. No glow effects IN the sprites.** (Status glow is added in canvas code, not baked into sprites)
+
+### Sprite Animation Frame Specification
+
+#### Worker Characters — Sprite Sheet Layout
+
+Each worker has a **4×4 sprite sheet** (4 rows × 4 columns):
+
+```
+Row 1: Facing DOWN  (toward viewer) — Frame 0 idle | Frame 1 walk-L | Frame 2 walk-R | Frame 3 idle-bob
+Row 2: Facing LEFT                   — Frame 0 idle | Frame 1 walk-L | Frame 2 walk-R | Frame 3 idle-bob
+Row 3: Facing RIGHT                  — Frame 0 idle | Frame 1 walk-L | Frame 2 walk-R | Frame 3 idle-bob
+Row 4: Facing UP   (away from viewer)— Frame 0 idle | Frame 1 walk-L | Frame 2 walk-R | Frame 3 idle-bob
+```
+
+**Idle animation (breathing/bob):**
+- Frame 0 → Frame 3 → Frame 0 loop (400ms each frame)
+- Frame 3 has body 1px lower than Frame 0 (subtle bob)
+- Head is same, only torso/legs shift slightly
+
+**Walk animation:**
+- Frame 0 → Frame 1 → Frame 0 → Frame 2 → repeat (150-200ms each frame)
+- Left leg forward in Frame 1, right leg forward in Frame 2
+- Arms swing opposite to legs
+
+**Per-worker animation intervals (so they don’t sync up):**
+```
+Worker A: idle bob every 420ms, walk frame every 160ms
+Worker B: idle bob every 380ms, walk frame every 175ms
+Worker C: idle bob every 460ms, walk frame every 155ms  (taller, slightly slower)
+Worker D: idle bob every 400ms, walk frame every 180ms
+Worker E: idle bob every 500ms, walk frame every 170ms  (deliberate pace)
+```
+
+#### Machine Sprites — Idle Animation Frames
+
+Each machine has a **1×2 or 1×3 sprite strip** for idle animation:
+
+```
+GOOD status:    Frame 0 | Frame 1  (soft vertical piston/indicator bob, 800ms per frame)
+WATCH status:   Frame 0 | Frame 1 | Frame 2  (slightly faster oscillation, 500ms per frame)
+CRITICAL status: Frame 0 | Frame 1 | Frame 2 | Frame 3  (erratic, 200-400ms random)
+```
+
+Status-based sprite swapping (not CSS filters — different sprite tint versions):
+- Good variant: normal colors
+- Watch variant: slight warm amber tint on highlights, rust on corner pixels
+- Critical variant: heavier rust, darker overall, warning indicator pixel on top
+
+### nano-banana Image Generation Prompts
+
+> [!NOTE]
+> Run these prompts using the `generate_image` tool before beginning canvas code. Save all generated images to `assets/sprites/` and `assets/maps/`. Reference them in PixiJS Sprite loading.
+
+---
+
+#### PROMPT GROUP 1 — Factory Zone Maps (5 zones)
+
+**Prompt 1A — Zone B: Assembly (primary showcase zone)**
+```
+Top-down pixel art factory floor map, GBA Pokemon RPG-Maker style matching the hospital interior map reference (clean tile grid floors, room dividers as thick pixel walls, furniture/equipment as top-down objects). Single rectangular factory room. Muted color palette: warm light grey tile floor (#D0CCC8), dark warm grey walls, muted steel blue for equipment bodies. Contains: 2 tall rectangular motor machines (side by side), 1 wide squat welding station with sparks indicator pixel, pipe lines connecting them drawn on floor as dark grey channels. Clear walking paths between machines. Scale: character sprites would be ~8-10% of room height. Top-down orthographic view. No perspective distortion. Resolution: 512x512 pixels. Solid 1px dark outlines on all objects. Style: image 4 hospital map aesthetic but industrial factory.
+```
+
+**Prompt 1B — Zone A: Raw Materials**
+```
+Top-down pixel art factory zone, GBA Pokemon RPG-Maker indoor style. Muted warm-sage floor tiles. Contains: 1 long horizontal conveyor belt machine (wide rectangle), 1 large square crusher machine with heavy dark body, pipe connections on floor between them, input/output markers. Multiple walking paths. Same muted industrial palette — no bright colors. 512x512. Dark outlines. Matches hospital map ref art style.
+```
+
+**Prompt 1C — Zone C: Packaging**
+```
+Top-down pixel art factory packaging zone, GBA RPG-Maker style. Warm beige-grey floor tiles. Contains: 1 medium square sealer machine, 1 wide rectangular wrapper machine, package output area with stacked box graphics. Connected by floor pipes. Muted warm palette. 512x512. Dark outlines. Same art style as image 4 reference.
+```
+
+**Prompt 1D — Zone D: Storage**
+```
+Top-down pixel art factory storage zone, GBA RPG-Maker style. Muted tan-grey floor. Contains: 1 L-shaped forklift bay machine with small cart graphic, shelving units along walls as top-down objects with box sprites on them, floor arrows indicating traffic flow as subtle pixel markers. Muted brown-grey palette. 512x512. Dark outlines.
+```
+
+**Prompt 1E — Zone E: QC**
+```
+Top-down pixel art factory quality control zone, GBA RPG-Maker style. Muted teal-grey tiles. Contains: 1 small square QC scanner machine with scan beam indicator pixel, inspection table as top-down flat rectangle, result indicator board on wall. Soft muted blue-grey palette. 512x512. Dark outlines. Clean, clinical feel within the pixel art style.
+```
+
+---
+
+#### PROMPT GROUP 2 — Worker Character Sprite Sheets (5 variants)
+
+**Prompt 2A — Worker A: Floor Operator**
+```
+Pixel art character sprite sheet, GBA Pokemon trainer style exactly like the red-hat trainer reference (image 1). Grid layout: 4 rows x 4 columns on white background. Row 1 facing down, Row 2 facing left, Row 3 facing right, Row 4 facing up. Columns: idle-stand, walk-left-leg-forward, walk-right-leg-forward, idle-bob (body 1px lower). Character: chibi proportions, round head, yellow hard hat, blue work overalls, dark brown boots, pale skin. Max 7 colors. 16x24px per sprite cell. Solid dark 1px outlines. Muted industrial colors. No neon. White grid background.
+```
+
+**Prompt 2B — Worker B: Technician**
+```
+Pixel art character sprite sheet, GBA Pokemon trainer style (same format as image 1). 4x4 grid on white background. Character: white hard hat, orange hi-vis vest over grey shirt, dark grey pants, brown work boots. Chibi proportions, round head. 4 directions x 4 frames (idle, walk-L, walk-R, idle-bob). 16x24px cells. Dark outlines. Muted colors only.
+```
+
+**Prompt 2C — Worker C: Supervisor**
+```
+Pixel art character sprite sheet, GBA Pokemon trainer style. 4x4 grid on white. Character: red hard hat, green safety jacket, khaki pants, black boots. Slightly taller than others (18x26px). Chibi proportions. 4 directions x 4 frames. Muted colors. Dark outlines.
+```
+
+**Prompt 2D — Worker D: Maintenance**
+```
+Pixel art character sprite sheet, GBA Pokemon trainer style. 4x4 grid on white. Character: no hat (dark hair), grey coveralls, dark boots. Tool belt visible as pixel detail on waist. When idle, holds wrench in one hand. 4 directions x 4 frames. 16x24px. Muted grey palette. Dark outlines.
+```
+
+**Prompt 2E — Worker E: Engineer**
+```
+Pixel art character sprite sheet, GBA Pokemon trainer style. 4x4 grid on white. Character: blue safety helmet, white shirt with tiny pixel tie, dark navy pants, black shoes. Holds clipboard as flat pixel rectangle when idle. 4 directions x 4 frames. 16x24px. Muted professional colors. Dark outlines.
+```
+
+---
+
+#### PROMPT GROUP 3 — Machine Sprites (status variants)
+
+**Prompt 3A — Motor Machine (MTR-1, MTR-2)**
+```
+Pixel art sprite strip of a top-down industrial motor machine, 3 frames wide x 1 frame tall on white background. Top-down view of a tall rectangular machine (32x48px). Frame 1: normal operation (steel blue body, dark grey details, small green indicator light). Frame 2: watch state (same body, amber tinted highlights, faint rust pixels on corners). Frame 3: critical state (darker body, heavy rust texture on corners, red indicator pixel, small steam dot above). Muted industrial palette. Dark 1px outlines. GBA pixel art style.
+```
+
+**Prompt 3B — Conveyor Belt (CONV)**
+```
+Pixel art sprite strip, top-down view of industrial conveyor belt. 3 frames wide x 1 tall. Long horizontal rectangle (64x24px). Conveyor belt texture as alternating dark/light grey horizontal bands with arrow direction markers. Frame 1: normal (moving lines, grey-slate). Frame 2: watch (slight amber tint, slower implied motion). Frame 3: critical (stopped, darker, red edges). Dark outlines. Muted palette.
+```
+
+**Prompt 3C — All other machines (CRSH, WLDR, SEAL, WRPR, FRKT, QCSC)**
+```
+Pixel art sprite sheet, top-down view of 6 different industrial machines arranged in a 3x2 grid on white. Each machine: 3 status variants shown as sub-frames. Crusher (large dark square with angular teeth-like details), Welder (wide squat with orange-brown body and spark pixel), Sealer (medium purple-grey square with clamping detail), Wrapper (wide teal rectangle with roll indicators), Forklift Bay (L-shaped yellow-brown with fork arms visible from above), QC Scanner (small cyan square with scan line detail). All top-down orthographic. Muted colors. Dark outlines. 32x32px base size each.
+```
+
+---
+
+#### PROMPT GROUP 4 — Tile Sets & UI Elements
+
+**Prompt 4A — Floor Tile Set**
+```
+Pixel art tile set, 5 floor tile variants on white background arranged in a row. Each tile 16x16px. Tile 1: light warm grey grid (Zone B default). Tile 2: sage green-grey (Zone A). Tile 3: warm beige-grey (Zone C). Tile 4: tan-grey (Zone D). Tile 5: teal-grey (Zone E). Each tile has subtle 1px grid lines on edges in slightly darker shade. No patterns, just clean flat color with minimal texture. GBA Pokemon floor tile aesthetic.
+```
+
+**Prompt 4B — Pipe/Conduit Tiles**
+```
+Pixel art pipe tile set for factory floor. 16x16px tiles on white background in a grid. Variants: horizontal straight pipe, vertical straight pipe, corner (4 rotations), T-junction (4 rotations). Pipes are 4px wide, centered in tile, dark warm grey color (#6A6460) with slight border darker shade. Status variants: normal (grey), watch (muted amber), critical (muted brick red). Clean pixel art. Industrial look.
+```
+
+---
+
+### Generated Reference Images
+
+> [!NOTE]
+> These images were generated as style prototypes using nano-banana. Final sprites generated during build must match this aesthetic.
+
+#### Factory Zone Map Reference
+
+![Factory Zone Map Reference](C:\Users\RYZEN\.gemini\antigravity\brain\5b7609d8-4c47-4b96-94be-e64d1d03b75d\factory_zone_map_reference_1774886932044.png)
+
+#### Worker Sprite Sheet Reference  
+
+![Worker Sprite Sheet Reference](C:\Users\RYZEN\.gemini\antigravity\brain\5b7609d8-4c47-4b96-94be-e64d1d03b75d\worker_sprite_sheet_reference_1774886948375.png)
+
+---
+
+### Sprite Asset Loading Strategy (PixiJS)
+
+```typescript
+// src/canvas/assets.ts
+import { Assets, Spritesheet } from 'pixi.js';
+
+// All generated sprites loaded as spritesheets
+const SPRITE_MANIFEST = [
+  { alias: 'worker-a', src: '/assets/sprites/worker_a_spritesheet.png' },
+  { alias: 'worker-b', src: '/assets/sprites/worker_b_spritesheet.png' },
+  { alias: 'worker-c', src: '/assets/sprites/worker_c_spritesheet.png' },
+  { alias: 'worker-d', src: '/assets/sprites/worker_d_spritesheet.png' },
+  { alias: 'worker-e', src: '/assets/sprites/worker_e_spritesheet.png' },
+  { alias: 'machines',  src: '/assets/sprites/machines_spritesheet.png' },
+  { alias: 'tiles',     src: '/assets/sprites/tiles_spritesheet.png' },
+  { alias: 'pipes',     src: '/assets/sprites/pipes_spritesheet.png' },
+  { alias: 'map-zone-a', src: '/assets/maps/zone_a_raw_materials.png' },
+  { alias: 'map-zone-b', src: '/assets/maps/zone_b_assembly.png' },
+  { alias: 'map-zone-c', src: '/assets/maps/zone_c_packaging.png' },
+  { alias: 'map-zone-d', src: '/assets/maps/zone_d_storage.png' },
+  { alias: 'map-zone-e', src: '/assets/maps/zone_e_qc.png' },
+];
+
+// Spritesheet frame definitions (generated from sprite positions)
+// Each worker: 16 frames (4 directions x 4 frames each)
+// Frame IDs: `{variant}_{direction}_{frame}` e.g. 'worker_a_down_0'
+export const WORKER_FRAME_MAP = {
+  down:  [0, 1, 2, 3],   // facing camera
+  left:  [4, 5, 6, 7],
+  right: [8, 9, 10, 11],
+  up:    [12, 13, 14, 15], // facing away
+};
+
+// Walking uses frames 1,0,2,0 (leg-L, neutral, leg-R, neutral)
+// Idle uses frames 0,3,0,3 (stand, bob-down, stand, bob-down)
+```
+
+---
 
 ### Project Scaffolding & Stack
 

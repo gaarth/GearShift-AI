@@ -1,0 +1,139 @@
+@import "tailwindcss";
+
+@theme {
+  /* Fonts */
+  --font-display: "Press Start 2P", system-ui, sans-serif;
+  --font-heading: "JetBrains Mono", monospace;
+  --font-mono: "Share Tech Mono", monospace;
+
+  /* Colors mapped directly from our CSS variables */
+  --color-floor-base: var(--bg-floor-base);
+  --color-floor-zone-a: var(--bg-floor-zone-a);
+  --color-floor-zone-b: var(--bg-floor-zone-b);
+  --color-floor-zone-c: var(--bg-floor-zone-c);
+  --color-floor-zone-d: var(--bg-floor-zone-d);
+  --color-floor-zone-e: var(--bg-floor-zone-e);
+  --color-wall: var(--bg-wall);
+  --color-wall-border: var(--bg-wall-border);
+
+  --color-ui-base: var(--bg-ui-base);
+  --color-ui-surface: var(--bg-ui-surface);
+  --color-ui-elevated: var(--bg-ui-elevated);
+  --color-ui-dark: var(--bg-ui-dark);
+
+  --color-status-good: var(--status-good);
+  --color-status-watch: var(--status-watch);
+  --color-status-critical: var(--status-critical);
+  --color-status-isolated: var(--status-isolated);
+
+  --color-pipe-default: var(--pipe-default);
+  --color-pipe-watch: var(--pipe-watch);
+  --color-pipe-critical: var(--pipe-critical);
+  --color-pipe-isolated: var(--pipe-isolated);
+  
+  --color-agent-sensor: var(--agent-sensor);
+  --color-agent-predict: var(--agent-predict);
+  --color-agent-rca: var(--agent-rca);
+  --color-agent-action: var(--agent-action);
+  --color-agent-roi: var(--agent-roi);
+  --color-agent-thinking: var(--agent-thinking);
+
+  --color-text-primary: var(--text-primary);
+  --color-text-secondary: var(--text-secondary);
+  --color-text-muted: var(--text-muted);
+  --color-text-on-dark: var(--text-on-dark);
+  --color-text-on-canvas: var(--text-on-canvas);
+
+  --color-accent-primary: var(--accent-primary);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-focus: var(--accent-focus);
+
+  --color-money-save: var(--money-save);
+  --color-money-loss: var(--money-loss);
+  --color-money-neutral: var(--money-neutral);
+}
+
+:root {
+  /* === CANVAS / MAP BACKGROUNDS === */
+  --bg-floor-base:     #D8D4CC;   /* Light warm grey — default tile floor */
+  --bg-floor-zone-a:   #C8D0C0;   /* Zone A: Raw Materials — muted sage */
+  --bg-floor-zone-b:   #C4CCD8;   /* Zone B: Assembly — muted slate blue */
+  --bg-floor-zone-c:   #D4C8C0;   /* Zone C: Packaging — muted warm */
+  --bg-floor-zone-d:   #C8C4B8;   /* Zone D: Storage — muted tan */
+  --bg-floor-zone-e:   #C0CCC8;   /* Zone E: QC — muted teal-grey */
+  --bg-wall:           #7A7068;   /* Wall color — dark warm grey */
+  --bg-wall-border:    #5A5048;   /* Wall border — darker warm grey */
+
+  /* === UI CHROME BACKGROUNDS === */
+  --bg-ui-base:        #F4F2EF;   /* UI panels — warm off-white */
+  --bg-ui-surface:     #ECEAE6;   /* Slightly darker surface */
+  --bg-ui-elevated:    #E4E2DE;   /* Cards, hover states */
+  --bg-ui-dark:        #2C2A28;   /* Dark UI elements — logs drawer */
+
+  /* === STATUS COLORS (muted, not neon) === */
+  --status-good:       #5A8A5A;   /* Operational — muted forest green */
+  --status-good-glow:  rgba(90, 138, 90, 0.25);
+  --status-watch:      #A08040;   /* Warning — muted amber/ochre */
+  --status-watch-glow: rgba(160, 128, 64, 0.25);
+  --status-critical:   #9A4040;   /* Critical — muted brick red */
+  --status-critical-glow: rgba(154, 64, 64, 0.25);
+  --status-isolated:   #8A8A8A;   /* Dead/isolated — grey */
+
+  /* === PIPE COLORS === */
+  --pipe-default:      #8A8078;   /* Default pipe — warm medium grey */
+  --pipe-watch:        #A08040;   /* Watch upstream — muted amber */
+  --pipe-critical:     #9A4040;   /* Critical upstream — muted brick */
+  --pipe-isolated:     #C0BCB8;   /* Dead pipe — light grey */
+
+  /* === AGENT LOG TAG COLORS (muted) === */
+  --agent-sensor:      #4A8A9A;   /* Cyan-grey — sensor readings */
+  --agent-predict:     #8A7A30;   /* Dark gold — prediction */
+  --agent-rca:         #9A6030;   /* Burnt orange — root cause */
+  --agent-action:      #9A4040;   /* Brick red — action decisions */
+  --agent-roi:         #5A8A5A;   /* Forest green — financial impact */
+  --agent-thinking:    #7A6A8A;   /* Muted purple — agent reasoning */
+
+  /* === UI TEXT === */
+  --text-primary:      #2C2A28;   /* Near-black — primary text */
+  --text-secondary:    #6A6460;   /* Medium warm grey — secondary */
+  --text-muted:        #9A9490;   /* Muted grey — hints, labels */
+  --text-on-dark:      #E8E4E0;   /* Light warm white — on dark panels */
+  --text-on-canvas:    #2C2A28;   /* On light canvas floor */
+
+  /* === ACCENT (UI buttons, focus states) === */
+  --accent-primary:    #4A6A8A;   /* Muted steel blue — buttons */
+  --accent-hover:      #3A5A7A;   /* Darker on hover */
+  --accent-focus:      rgba(74, 106, 138, 0.3); /* Focus ring */
+
+  /* === FINANCIAL === */
+  --money-save:        #5A8A5A;   /* Muted green */
+  --money-loss:        #9A4040;   /* Muted red */
+  --money-neutral:     #8A7A30;   /* Muted gold */
+
+  /* === PROJECTION OVERLAY === */
+  --projection-tint:   rgba(100, 90, 120, 0.10); /* Very subtle purple tint */
+}
+
+body {
+  margin: 0;
+  font-family: var(--font-heading);
+  background-color: var(--bg-ui-base);
+  color: var(--text-primary);
+  overflow: hidden; /* Prevent scrolling for the dashboard */
+}
+
+/* Base resets */
+* {
+  box-sizing: border-box;
+}
+
+/* Typography Helpers */
+.font-display { font-family: var(--font-display); }
+.font-heading { font-family: var(--font-heading); }
+.font-mono { font-family: var(--font-mono); }
+
+/* Pixel Art Image Scaling */
+.pixel-art {
+  image-rendering: pixelated;
+  image-rendering: crisp-edges;
+}

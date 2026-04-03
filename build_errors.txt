@@ -1,0 +1,7 @@
+
+> temp-app@0.0.0 build
+> tsc -b && vite build
+
+src/App.tsx(25,30): error TS2440: Import declaration conflicts with local declaration of 'TimeView'.
+src/canvas/SmokeSystem.tsx(1,29): error TS6133: 'useState' is declared but its value is never read.
+src/components/layout/TopBar.tsx(2,30): error TS1484: 'SimMode' is a type and must be imported using a type-only import when 'verbatimModuleSyntax' is enabled.
